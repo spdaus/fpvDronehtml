@@ -1,0 +1,252 @@
+# FPV Drone Simulator — Spec-Driven Plan
+
+## Context
+You want a realistic FPV (acro) drone simulator, flown with a Switch Pro controller, where low latency and smooth frame pacing come first. The project folder has only a prior experiment, `pro controller setup test/`. It showed that:
+- The browser Gamepad API reports this controller with a **non-standard mapping**: right stick on axis 4 and the D-pad as a hat on axis 9.
+- `controller-bridge.py` reads the controller correctly through Windows **winmm** (`joyGetPosEx`). Through the bridge, the right stick reports **X on axis 3 (U) and Y on axis 2 (R)**. The browser gets the data by polling HTTP `/state` every 8 ms.
+
+The target machine is this laptop: GT 750M / HD 4600 and a 4K display at 59 Hz. Graphics must stay light, with a locked 60 fps and a reduced internal render resolution. 720p is also what real FPV goggles show.
+
+**MVP scope (your answers):** core FPV flight model, a freestyle map with a bando (abandoned building), and a **target that spawns at a random spot inside the building**. Fly into it to score, and the next one spawns. Throttle uses **center = hover**, a Betaflight-style throttle curve with its mid point at hover.
+
+**Stack:** browser, Vite + TypeScript + Three.js (npm, pinned), and Vitest for tests. It builds on your existing browser and bridge work. Node 26 and Python 3.14 are already installed. The bridge uses only the Python standard library.
+
+---
+
+## Step 0 — Specs first (spec-driven)
+Run `git init` (the folder isn't a repo yet). Write three spec docs, then **pause for your review before any code**:
+- `specs/drone-sim/requirements.md`: user stories with numbered EARS-style acceptance criteria (R1…Rn). The content is summarized below.
+- `specs/drone-sim/design.md`: architecture, coordinate frames, the physics model with equations and default parameters, the input pipeline, the latency and performance budgets, and a map from each R-id to the tests that cover it.
+- `specs/drone-sim/tasks.md`: an ordered checklist. Each task names the R-ids it satisfies and its test. It is updated as tasks land.
+
+### Requirements summary (what the spec will pin down)
+- **R1 Input**
+  - Reads the Pro Controller through the bridge, with the browser Gamepad API as a fallback.
+  - Mode 2 layout: left stick = throttle/yaw, right stick = pitch/roll.
+  - Per-axis calibration of center/min/max, saved to localStorage. This matters because Pro Controller sticks rarely reach ±1.
+  - Small deadzone (~0.03).
+  - Buttons: arm/disarm, reset, camera-tilt ±5° on the D-pad, pause, debug overlay.
+- **R2 Throttle:** stick center gives hover thrust (±5%), full down gives motor idle, full up gives 100%. Uses Betaflight `thr_mid`/`thr_expo`, with mid derived from the quad's hover throttle.
+- **R3 Acro rates:** Betaflight rates (RC rate, super rate, expo). Default max rate is about 670°/s. The stick-to-deg/s curve matches the Betaflight formula to within 1%.
+- **R4 Flight realism:**
+  - 1 kHz fixed-step physics.
+  - Rate PID with feed-forward and airmode.
+  - Motor spool lag, with spin-up faster than spin-down.
+  - Thrust loss as airspeed through the props rises.
+  - Quadratic drag that differs by axis.
+  - Prop-wash turbulence when descending into your own wash.
+  - Battery sag.
+  - Momentum-heavy handling (5" freestyle, ~650 g, ~8:1 thrust-to-weight).
+- **R5 Collisions and crashes**
+  - The quad is a sphere colliding with the ground and box colliders, with no tunneling at 40 m/s.
+  - Light bumps bounce off; an impact above a speed threshold counts as a crash (disarm plus an OSD message).
+  - The reset button returns the quad to the launch pad.
+- **R6 World:** a low-poly park containing a multi-floor bando with windows, holes, stairwell gaps, pillars and a missing wall, plus instanced trees and a launch pad.
+- **R7 Target game**
+  - The target spawns at a random, collision-free point inside the building's interior volumes.
+  - Touching it scores and respawns it.
+  - The OSD shows score, distance, and a direction chevron.
+- **R8 FPV camera and OSD**
+  - The camera is rigidly mounted with 30° default uptilt (adjustable) and a wide FOV (configurable, ~110° horizontal).
+  - A Betaflight-style OSD shows voltage, throttle %, flight timer, and armed/crash state.
+- **R9 Performance:** 60 fps locked on the target laptop with a p99 frame time ≤ 16.6 ms, internal render at 1280×720 or lower with dynamic scaling, fewer than 100 draw calls, and no per-frame allocations in the hot loop.
+- **R10 Latency:** the controller is sampled at 1 kHz. Input is consumed right before physics steps each frame, then rendered at once. The debug overlay shows input age, frame time and fps.
+
+---
+
+## Architecture (design.md detail)
+
+```
+bridge/bridge.py         winmm poll thread @1kHz (timeBeginPeriod(1)) → SSE /stream (push on change + heartbeat);
+                         keeps /state; serves dist/. Evolved from "pro controller setup test/controller-bridge.py".
+src/input/               bridgeSource.ts (EventSource), gamepadSource.ts (getGamepads, non-standard map incl. axis 4/hat 9),
+                         calibration.ts, mapping.ts (axes → throttle/yaw/pitch/roll ∈ [-1,1], buttons → edges)
+src/sim/  (pure TS, no DOM/renderer → unit-testable in Node)
+  params.ts              quad presets (5" freestyle default): mass, inertia, arm length, kT, kQ, motor τ up/down, drag coeffs
+  rates.ts, throttle.ts  Betaflight rate curve; thr_mid/thr_expo curve
+  pid.ts, flightController.ts   rate PID + FF, I-term relax, airmode
+  mixer.ts               quad-X mixer with desaturation (airmode)
+  motors.ts              first-order lag, thrust ∝ ω², inflow thrust loss, reaction + spin-accel yaw torque
+  aero.ts                body drag, angular damping, prop-wash noise (seeded), mild ground effect
+  battery.ts             6S sag vs current and mAh used → scales max thrust
+  collision.ts           sphere vs AABB/OBB list (uniform grid broadphase), impulse response, crash detection
+  drone.ts               state + step(dt, inputs); semi-implicit Euler, quaternion attitude, fixed 1 ms step
+src/world/               bando.ts (building from box list = render + colliders, one source of truth),
+                         park.ts (ground, instanced trees, pad), targets.ts (interior spawn volumes + rejection sampling)
+src/render/              renderer.ts (WebGL2, antialias off, powerPreference high-performance, desynchronized canvas,
+                         pixelRatio 1, render-scale + dynamic resolution), scene.ts (merged static geometry, vertex
+                         colors, hemi + directional light, no realtime shadows, fog), fpvCamera.ts, osd.ts (DOM overlay,
+                         updated at ≤20 Hz to avoid layout cost)
+src/main.ts / loop.ts    rAF loop: read input → run N×1ms physics steps (accumulator, clamped) → sync camera/meshes → render
+tests/                   Vitest
+play.bat                 starts the bridge and opens Chrome in app mode at localhost
+```
+
+Key design decisions:
+- **Sim frame is Three.js's own:** Y up, −Z forward, body x right. This means no conversions at the render boundary. `three/math` classes are used with preallocated temporaries.
+- **No render interpolation needed:** with a 1 ms step, the render sees state that is at most 1 ms old.
+- **Latency path:** the bridge pushes over SSE instead of HTTP polling. Input is read at the top of each rAF, and the desynchronized canvas reduces compositor latency. `play.bat` offers an optional "low-latency" profile with Chrome flags `--disable-gpu-vsync --disable-frame-rate-limit`, trading tearing for lower latency. The docs also cover setting Chrome to "High performance" GPU in Windows graphics settings so it uses the GT 750M rather than the Intel chip.
+- **Dev flow:** `npm run dev` runs Vite, which proxies `/stream` to the bridge on :8765. `npm run build` produces `dist/`, served by the bridge.
+
+## Implementation tasks (tasks.md order)
+1. Scaffold: git init, Vite + TS + Three + Vitest, lint and tsconfig strict.
+2. Bridge: 1 kHz poll thread plus SSE stream, and a small Python test of the axis normalization. Input sources, calibration and mapping (R1).
+3. Sim core: rates, throttle, PID, mixer, motors, rigid body, aero, battery (R2–R4), each with unit tests.
+4. Collision and crash handling (R5).
+5. World: park, bando, trees and pad, sharing one collider list (R6).
+6. Renderer, FPV camera and OSD, with dynamic resolution (R8, R9).
+7. Target spawning and scoring (R7).
+8. Game loop and states (disarmed → armed → crashed → reset). Arming requires throttle low, as on a real quad.
+9. Debug overlay (fps, p99 frame time, input age, physics ms), plus `play.bat` and a README section.
+10. Tuning pass: fly-test feel and adjust the defaults in `params.ts`.
+
+Existing code reused:
+- The `joyGetPosEx`/`JOYINFOEX` code and the axis normalization in `pro controller setup test/controller-bridge.py`.
+- The non-standard mapping knowledge from `controller-test.html:104-122`: axis 4, hat on axis 9 with values `(h+1)*3.5`, neutral ≈1.29.
+- The bridge axis swap from `controller-test-3d.html:148-150`.
+
+The test folder is left untouched.
+
+## Verification
+- **Unit tests (`npm test`), each tied to an R-id:**
+  - The rate curve matches Betaflight reference values.
+  - Stick center gives hover, so vertical acceleration stays under 0.3 m/s² after spool-up.
+  - The hover-hold sim drifts less than 0.5 m over 5 s.
+  - A roll step reaches 90% of setpoint in under 80 ms.
+  - A full-stick flip takes about 0.55 s at 670°/s.
+  - The motor time constant is respected.
+  - Airmode keeps attitude authority at zero throttle.
+  - No tunneling at 40 m/s into a 10 cm wall.
+  - Crash threshold behavior.
+  - 1,000 random target spawns all land inside interior volumes and outside colliders.
+  - Determinism: the same inputs give the same state.
+- **Performance bench (`npm run bench`):** 60 s of sim time in Node must use under 150 ms per real second of flight, i.e. under 10% of the frame budget.
+- **Browser check:** `npm run build`, start the bridge, and open the page with the preview tools. Confirm no console errors, ~60 fps and a stable p99 frame time in the debug overlay, and that the target spawns inside the bando.
+- **Manual (you):** calibrate the sticks, then check hover at stick center, flips/rolls, the prop-wash wobble when dropping, crash-and-reset, and flying through bando windows to hit targets.
+
+
+# FPV Drone Simulator — Spec-Driven Plan
+
+## Context
+You want a realistic FPV (acro) drone simulator, flown with a Switch Pro controller, where low latency and smooth frame pacing come first. The project folder has only a prior experiment, `pro controller setup test/`. It showed that:
+- The browser Gamepad API reports this controller with a **non-standard mapping**: right stick on axis 4 and the D-pad as a hat on axis 9.
+- `controller-bridge.py` reads the controller correctly through Windows **winmm** (`joyGetPosEx`). Through the bridge, the right stick reports **X on axis 3 (U) and Y on axis 2 (R)**. The browser gets the data by polling HTTP `/state` every 8 ms.
+
+The target machine is this laptop: GT 750M / HD 4600 and a 4K display at 59 Hz. Graphics must stay light, with a locked 60 fps and a reduced internal render resolution. 720p is also what real FPV goggles show.
+
+**MVP scope (your answers):** core FPV flight model, a freestyle map with a bando (abandoned building), and a **target that spawns at a random spot inside the building**. Fly into it to score, and the next one spawns. Throttle uses **center = hover**, a Betaflight-style throttle curve with its mid point at hover.
+
+**Stack:** browser, Vite + TypeScript + Three.js (npm, pinned), and Vitest for tests. It builds on your existing browser and bridge work. Node 26 and Python 3.14 are already installed. The bridge uses only the Python standard library.
+
+---
+
+## Step 0 — Specs first (spec-driven)
+Run `git init` (the folder isn't a repo yet). Write three spec docs, then **pause for your review before any code**:
+- `specs/drone-sim/requirements.md`: user stories with numbered EARS-style acceptance criteria (R1…Rn). The content is summarized below.
+- `specs/drone-sim/design.md`: architecture, coordinate frames, the physics model with equations and default parameters, the input pipeline, the latency and performance budgets, and a map from each R-id to the tests that cover it.
+- `specs/drone-sim/tasks.md`: an ordered checklist. Each task names the R-ids it satisfies and its test. It is updated as tasks land.
+
+### Requirements summary (what the spec will pin down)
+- **R1 Input**
+  - Reads the Pro Controller through the bridge, with the browser Gamepad API as a fallback.
+  - Mode 2 layout: left stick = throttle/yaw, right stick = pitch/roll.
+  - Per-axis calibration of center/min/max, saved to localStorage. This matters because Pro Controller sticks rarely reach ±1.
+  - Small deadzone (~0.03).
+  - Buttons: arm/disarm, reset, camera-tilt ±5° on the D-pad, pause, debug overlay.
+- **R2 Throttle:** stick center gives hover thrust (±5%), full down gives motor idle, full up gives 100%. Uses Betaflight `thr_mid`/`thr_expo`, with mid derived from the quad's hover throttle.
+- **R3 Acro rates:** Betaflight rates (RC rate, super rate, expo). Default max rate is about 670°/s. The stick-to-deg/s curve matches the Betaflight formula to within 1%.
+- **R4 Flight realism:**
+  - 1 kHz fixed-step physics.
+  - Rate PID with feed-forward and airmode.
+  - Motor spool lag, with spin-up faster than spin-down.
+  - Thrust loss as airspeed through the props rises.
+  - Quadratic drag that differs by axis.
+  - Prop-wash turbulence when descending into your own wash.
+  - Battery sag.
+  - Momentum-heavy handling (5" freestyle, ~650 g, ~8:1 thrust-to-weight).
+- **R5 Collisions and crashes**
+  - The quad is a sphere colliding with the ground and box colliders, with no tunneling at 40 m/s.
+  - Light bumps bounce off; an impact above a speed threshold counts as a crash (disarm plus an OSD message).
+  - The reset button returns the quad to the launch pad.
+- **R6 World:** a low-poly park containing a multi-floor bando with windows, holes, stairwell gaps, pillars and a missing wall, plus instanced trees and a launch pad.
+- **R7 Target game**
+  - The target spawns at a random, collision-free point inside the building's interior volumes.
+  - Touching it scores and respawns it.
+  - The OSD shows score, distance, and a direction chevron.
+- **R8 FPV camera and OSD**
+  - The camera is rigidly mounted with 30° default uptilt (adjustable) and a wide FOV (configurable, ~110° horizontal).
+  - A Betaflight-style OSD shows voltage, throttle %, flight timer, and armed/crash state.
+- **R9 Performance:** 60 fps locked on the target laptop with a p99 frame time ≤ 16.6 ms, internal render at 1280×720 or lower with dynamic scaling, fewer than 100 draw calls, and no per-frame allocations in the hot loop.
+- **R10 Latency:** the controller is sampled at 1 kHz. Input is consumed right before physics steps each frame, then rendered at once. The debug overlay shows input age, frame time and fps.
+
+---
+
+## Architecture (design.md detail)
+
+```
+bridge/bridge.py         winmm poll thread @1kHz (timeBeginPeriod(1)) → SSE /stream (push on change + heartbeat);
+                         keeps /state; serves dist/. Evolved from "pro controller setup test/controller-bridge.py".
+src/input/               bridgeSource.ts (EventSource), gamepadSource.ts (getGamepads, non-standard map incl. axis 4/hat 9),
+                         calibration.ts, mapping.ts (axes → throttle/yaw/pitch/roll ∈ [-1,1], buttons → edges)
+src/sim/  (pure TS, no DOM/renderer → unit-testable in Node)
+  params.ts              quad presets (5" freestyle default): mass, inertia, arm length, kT, kQ, motor τ up/down, drag coeffs
+  rates.ts, throttle.ts  Betaflight rate curve; thr_mid/thr_expo curve
+  pid.ts, flightController.ts   rate PID + FF, I-term relax, airmode
+  mixer.ts               quad-X mixer with desaturation (airmode)
+  motors.ts              first-order lag, thrust ∝ ω², inflow thrust loss, reaction + spin-accel yaw torque
+  aero.ts                body drag, angular damping, prop-wash noise (seeded), mild ground effect
+  battery.ts             6S sag vs current and mAh used → scales max thrust
+  collision.ts           sphere vs AABB/OBB list (uniform grid broadphase), impulse response, crash detection
+  drone.ts               state + step(dt, inputs); semi-implicit Euler, quaternion attitude, fixed 1 ms step
+src/world/               bando.ts (building from box list = render + colliders, one source of truth),
+                         park.ts (ground, instanced trees, pad), targets.ts (interior spawn volumes + rejection sampling)
+src/render/              renderer.ts (WebGL2, antialias off, powerPreference high-performance, desynchronized canvas,
+                         pixelRatio 1, render-scale + dynamic resolution), scene.ts (merged static geometry, vertex
+                         colors, hemi + directional light, no realtime shadows, fog), fpvCamera.ts, osd.ts (DOM overlay,
+                         updated at ≤20 Hz to avoid layout cost)
+src/main.ts / loop.ts    rAF loop: read input → run N×1ms physics steps (accumulator, clamped) → sync camera/meshes → render
+tests/                   Vitest
+play.bat                 starts the bridge and opens Chrome in app mode at localhost
+```
+
+Key design decisions:
+- **Sim frame is Three.js's own:** Y up, −Z forward, body x right. This means no conversions at the render boundary. `three/math` classes are used with preallocated temporaries.
+- **No render interpolation needed:** with a 1 ms step, the render sees state that is at most 1 ms old.
+- **Latency path:** the bridge pushes over SSE instead of HTTP polling. Input is read at the top of each rAF, and the desynchronized canvas reduces compositor latency. `play.bat` offers an optional "low-latency" profile with Chrome flags `--disable-gpu-vsync --disable-frame-rate-limit`, trading tearing for lower latency. The docs also cover setting Chrome to "High performance" GPU in Windows graphics settings so it uses the GT 750M rather than the Intel chip.
+- **Dev flow:** `npm run dev` runs Vite, which proxies `/stream` to the bridge on :8765. `npm run build` produces `dist/`, served by the bridge.
+
+## Implementation tasks (tasks.md order)
+1. Scaffold: git init, Vite + TS + Three + Vitest, lint and tsconfig strict.
+2. Bridge: 1 kHz poll thread plus SSE stream, and a small Python test of the axis normalization. Input sources, calibration and mapping (R1).
+3. Sim core: rates, throttle, PID, mixer, motors, rigid body, aero, battery (R2–R4), each with unit tests.
+4. Collision and crash handling (R5).
+5. World: park, bando, trees and pad, sharing one collider list (R6).
+6. Renderer, FPV camera and OSD, with dynamic resolution (R8, R9).
+7. Target spawning and scoring (R7).
+8. Game loop and states (disarmed → armed → crashed → reset). Arming requires throttle low, as on a real quad.
+9. Debug overlay (fps, p99 frame time, input age, physics ms), plus `play.bat` and a README section.
+10. Tuning pass: fly-test feel and adjust the defaults in `params.ts`.
+
+Existing code reused:
+- The `joyGetPosEx`/`JOYINFOEX` code and the axis normalization in `pro controller setup test/controller-bridge.py`.
+- The non-standard mapping knowledge from `controller-test.html:104-122`: axis 4, hat on axis 9 with values `(h+1)*3.5`, neutral ≈1.29.
+- The bridge axis swap from `controller-test-3d.html:148-150`.
+
+The test folder is left untouched.
+
+## Verification
+- **Unit tests (`npm test`), each tied to an R-id:**
+  - The rate curve matches Betaflight reference values.
+  - Stick center gives hover, so vertical acceleration stays under 0.3 m/s² after spool-up.
+  - The hover-hold sim drifts less than 0.5 m over 5 s.
+  - A roll step reaches 90% of setpoint in under 80 ms.
+  - A full-stick flip takes about 0.55 s at 670°/s.
+  - The motor time constant is respected.
+  - Airmode keeps attitude authority at zero throttle.
+  - No tunneling at 40 m/s into a 10 cm wall.
+  - Crash threshold behavior.
+  - 1,000 random target spawns all land inside interior volumes and outside colliders.
+  - Determinism: the same inputs give the same state.
+- **Performance bench (`npm run bench`):** 60 s of sim time in Node must use under 150 ms per real second of flight, i.e. under 10% of the frame budget.
+- **Browser check:** `npm run build`, start the bridge, and open the page with the preview tools. Confirm no console errors, ~60 fps and a stable p99 frame time in the debug overlay, and that the target spawns inside the bando.
+- **Manual (you):** calibrate the sticks, then check hover at stick center, flips/rolls, the prop-wash wobble when dropping, crash-and-reset, and flying through bando windows to hit targets.

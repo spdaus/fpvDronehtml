@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pro Controller 3D Test</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1116; font-family: system-ui, sans-serif; color: #fff; }
+  canvas { display: block; }
+  #hud { position: fixed; top: 12px; left: 12px; font-size: 13px; line-height: 1.5; background: rgba(0,0,0,.55); padding: 10px 12px; border-radius: 8px; max-width: 340px; }
+  #hud b { font-weight: 600; }
+  #status.ok { color: #3ddc84; }
+  #status.bad { color: #ff7b72; }
+  .stick { display: inline-block; width: 64px; height: 64px; border: 1px solid #666; border-radius: 50%; position: relative; margin: 6px 8px 0 0; }
+  .stick i { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: #4da3ff; left: 26px; top: 26px; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: rgba(255,255,255,.7); }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="hud">
+  <b>Pro Controller 3D Test</b><br>
+  <span id="status" class="bad">Waiting for controller…</span><br>
+  Left stick: move · Right stick: orbit camera · A/B: jump<br>
+  <span class="stick"><i id="ls"></i></span><span class="stick"><i id="rs"></i></span><br>
+  <span id="info"></span>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ---------- scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8fb8e8);
+scene.fog = new THREE.Fog(0x8fb8e8, 30, 120);
+
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 300);
+camera.rotation.order = 'YXZ';
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445544, 1.0));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(40, 60, 20);
+scene.add(sun);
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0x4f8a4f }));
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+const grid = new THREE.GridHelper(200, 100, 0x2f5a2f, 0x3d7040);
+grid.position.y = 0.01;
+scene.add(grid);
+
+// landmarks: pillars (collidable) + a few boxes, from a seeded generator so the layout is stable
+let seed = 7;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const pillars = [];
+for (let i = 0; i < 40; i++) {
+  const r = 0.6 + rnd() * 0.8, h = 2 + rnd() * 6;
+  const x = (rnd() - 0.5) * 160, z = (rnd() - 0.5) * 160;
+  if (Math.hypot(x, z) < 6) continue; // keep the spawn clear
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 20), new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(rnd(), 0.6, 0.55) }));
+  m.position.set(x, h / 2, z);
+  scene.add(m);
+  pillars.push({ x, z, r });
+}
+// coloured markers at the compass points
+[[0, -12, 0xff5555], [12, 0, 0x55ff55], [0, 12, 0x5588ff], [-12, 0, 0xffdd55]].forEach(([x, z, c]) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ color: c }));
+  m.position.set(x, 1, z);
+  scene.add(m);
+  pillars.push({ x, z, r: 1.4 });
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- controller input ----------
+// Preferred: controller-bridge.py (reads Windows' joystick API). Fallback: browser Gamepad API.
+const BRIDGE = location.protocol.startsWith('http');
+let bridgePad = null;
+if (BRIDGE) {
+  const poll = async () => {
+    try {
+      const s = await (await fetch('/state', { cache: 'no-store' })).json();
+      bridgePad = s.connected ? { axes: s.axes, buttons: s.buttons, source: 'bridge' } : null;
+    } catch { bridgePad = null; }
+    setTimeout(poll, 8);
+  };
+  poll();
+}
+function readPad() {
+  if (bridgePad) return bridgePad;
+  const p = navigator.getGamepads ? [...navigator.getGamepads()].find(x => x) : null;
+  if (!p) return null;
+  return { axes: [...p.axes], buttons: p.buttons.map(b => b.pressed), source: 'browser' };
+}
+
+const DEAD = 0.15;
+const dz = v => { const a = Math.abs(v || 0); return a < DEAD ? 0 : Math.sign(v) * (a - DEAD) / (1 - DEAD); };
+
+// ---------- player ----------
+const CAM_DIST = 6, CAM_HEIGHT = 1.5, WALK = 6, LOOK = 2.6, GRAVITY = 22, JUMP = 8, BOUND = 96;
+const player = { x: 0, z: 8, y: 0, vy: 0, yaw: 0, pitch: -0.3, heading: 0, walk: 0 };
+
+// simple blocky character; its front faces +z, and rotation.y = heading
+const skin = new THREE.MeshStandardMaterial({ color: 0xf2c38b });
+const shirt = new THREE.MeshStandardMaterial({ color: 0xe23d3d });
+const pants = new THREE.MeshStandardMaterial({ color: 0x2b3a67 });
+const char = new THREE.Group();
+const part = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); char.add(m); return m; };
+part(new THREE.BoxGeometry(0.6, 0.75, 0.35), shirt, 0, 1.15, 0);                       // torso
+part(new THREE.SphereGeometry(0.24, 20, 16), skin, 0, 1.75, 0);                        // head
+part(new THREE.BoxGeometry(0.2, 0.08, 0.1), new THREE.MeshStandardMaterial({ color: 0x222222 }), 0, 1.78, 0.22); // visor shows facing
+// limbs pivot from the shoulder/hip so they swing when walking
+const limb = (geo, mat, x, y) => {
+  const pivot = new THREE.Group(); pivot.position.set(x, y, 0);
+  const m = new THREE.Mesh(geo, mat); m.position.y = -geo.parameters.height / 2; pivot.add(m); char.add(pivot); return pivot;
+};
+const armGeo = new THREE.BoxGeometry(0.16, 0.7, 0.16), legGeo = new THREE.BoxGeometry(0.22, 0.78, 0.22);
+const armL = limb(armGeo, skin, -0.4, 1.5), armR = limb(armGeo, skin, 0.4, 1.5);
+const legL = limb(legGeo, pants, -0.15, 0.78), legR = limb(legGeo, pants, 0.15, 0.78);
+const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.45, 24), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 }));
+shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02;
+scene.add(char, shadow);
+
+const $ = id => document.getElementById(id);
+let last = performance.now();
+
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  const pad = readPad();
+
+  let mx = 0, mz = 0, lx = 0, ly = 0, rx = 0, ry = 0, pressed = [];
+  if (pad) {
+    // standard browser mapping: left = 0/1, right = 2/3 ; bridge: X,Y,R,U = 0,1,2,3 (same layout)
+    lx = dz(pad.axes[0]); ly = dz(pad.axes[1]);
+    // this controller's right stick over the bridge reports X on axis 3 and Y on axis 2
+    const swapped = pad.source === 'bridge';
+    rx = dz(pad.axes[swapped ? 3 : 2]); ry = dz(pad.axes[swapped ? 2 : 3]);
+    pressed = pad.buttons.map((b, i) => b ? i : null).filter(i => i !== null);
+
+    player.yaw -= rx * LOOK * dt;
+    player.pitch = Math.max(-1.2, Math.min(0.3, player.pitch - ry * LOOK * dt));
+
+    // move relative to where we're facing (stick up = forward)
+    const fwd = -ly, strafe = lx;
+    const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
+    mx = (strafe * cos - fwd * sin) * WALK * dt;
+    mz = (-strafe * sin - fwd * cos) * WALK * dt;
+
+    if (player.y === 0 && (pressed.includes(0) || pressed.includes(1))) player.vy = JUMP;
+  }
+
+  player.x = Math.max(-BOUND, Math.min(BOUND, player.x + mx));
+  player.z = Math.max(-BOUND, Math.min(BOUND, player.z + mz));
+  player.vy -= GRAVITY * dt;
+  player.y = Math.max(0, player.y + player.vy * dt);
+  if (player.y === 0) player.vy = 0;
+
+  // push out of pillars
+  for (const p of pillars) {
+    const dx = player.x - p.x, dzz = player.z - p.z, min = p.r + 0.4, d = Math.hypot(dx, dzz);
+    if (d < min && d > 0) { player.x = p.x + dx / d * min; player.z = p.z + dzz / d * min; }
+  }
+
+  // turn the character to face where it's moving, and swing its limbs
+  const speed = Math.hypot(mx, mz) / dt / WALK || 0;
+  if (speed > 0.05) {
+    const want = Math.atan2(mx, mz);
+    const diff = ((want - player.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    player.heading += diff * Math.min(1, dt * 12);
+  }
+  player.walk += speed * dt * 10;
+  const swing = Math.sin(player.walk) * 0.9 * Math.min(1, speed) * (player.y > 0 ? 0.3 : 1);
+  armL.rotation.x = swing; armR.rotation.x = -swing;
+  legL.rotation.x = -swing; legR.rotation.x = swing;
+  char.position.set(player.x, player.y, player.z);
+  char.rotation.y = player.heading;
+  shadow.position.set(player.x, 0.02, player.z);
+  shadow.scale.setScalar(Math.max(0.4, 1 - player.y * 0.2));
+
+  // chase camera: orbit behind the character, looking where yaw/pitch point
+  const cp = Math.cos(player.pitch);
+  const tx = player.x, ty = player.y + CAM_HEIGHT, tz = player.z;
+  camera.position.set(
+    tx + Math.sin(player.yaw) * cp * CAM_DIST,
+    Math.max(0.3, ty - Math.sin(player.pitch) * CAM_DIST),
+    tz + Math.cos(player.yaw) * cp * CAM_DIST,
+  );
+  camera.rotation.set(player.pitch, player.yaw, 0);
+  renderer.render(scene, camera);
+
+  // HUD
+  const st = $('status');
+  st.className = pad ? 'ok' : 'bad';
+  st.textContent = pad ? `Controller connected (${pad.source})` : 'No controller — press a button / start the bridge';
+  $('ls').style.transform = `translate(${lx * 24}px, ${ly * 24}px)`;
+  $('rs').style.transform = `translate(${rx * 24}px, ${ry * 24}px)`;
+  $('info').textContent = pad ? `pos ${player.x.toFixed(1)}, ${player.z.toFixed(1)} · buttons: ${pressed.join(', ') || '-'}` : '';
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
