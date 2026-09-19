@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { GameSession } from '../game/session';
+import { ARM_THROTTLE_MAX, type GameSession } from '../game/session';
 import { TARGET_RADIUS } from '../game/targets';
 import { DEG2RAD } from '../sim/math';
 
@@ -100,7 +100,8 @@ export class Osd {
       hint = 'KEYBOARD: W/S THR  A/D YAW  ARROWS PITCH/ROLL  SPACE ARM  R RESET';
     } else if (s.state === 'disarmed') {
       warn = 'DISARMED';
-      hint = 'HOLD THROTTLE DOWN + ZR TO ARM';
+      const stickPct = Math.round(s.throttleStick * 100);
+      hint = `THROTTLE STICK ${stickPct}% · HOLD IT DOWN (< ${Math.round(ARM_THROTTLE_MAX * 100)}%) + ZR TO ARM`;
     } else if (lowBat) warn = 'LOW BATTERY';
     this.text('warn', warn);
     this.text('hint', hint);

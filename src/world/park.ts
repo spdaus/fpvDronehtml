@@ -40,8 +40,8 @@ export function buildPark(seed = 1337, treeCount = 150): Park {
   const { x, z, half, height } = PAD;
   boxes.push(box([x - half, 0, z - half], [x + half, height, z + half], 0x2b2d31, 'pad'));
   // Pad markings (paint).
-  boxes.push(box([x - 0.5, height, z - 0.06], [x + 0.5, height + 0.005, z + 0.06], 0xf2c14e, 'decal'));
-  boxes.push(box([x - 0.06, height, z - 0.5], [x + 0.06, height + 0.005, z - 0.06], 0xf2c14e, 'decal'));
+  boxes.push(box([x - 0.5, height, z - 0.06], [x + 0.5, height + 0.01, z + 0.06], 0xf2c14e, 'decal'));
+  boxes.push(box([x - 0.06, height, z - 0.5], [x + 0.06, height + 0.01, z - 0.06], 0xf2c14e, 'decal'));
 
   // Container yard: two stacks with a container bridging them → a tunnel gap underneath.
   const yard: Array<[number, number, number, number, number, number, number]> = [

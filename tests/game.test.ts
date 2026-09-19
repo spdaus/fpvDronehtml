@@ -58,9 +58,17 @@ describe('targets', () => {
 });
 
 describe('session state machine', () => {
+  it('arms with the throttle stick short of full travel (Pro Controller sticks reach ~70%)', () => {
+    const s = session();
+    // Full down on a stick that only reaches 70% of its range: s = (1 - 0.7) / 2 = 0.15.
+    expect(s.toggleArm(0.15)).toBe(true);
+    expect(s.drone.throttleOut).toBeLessThan(s.drone.hover);
+  });
+
   it('refuses to arm with throttle up, arms with throttle low', () => {
     const s = session();
     expect(s.toggleArm(0.5)).toBe(false);
+    expect(s.toggleArm(0.25)).toBe(false);
     expect(s.state).toBe('disarmed');
     expect(s.armWarnUntil).toBeGreaterThan(s.time);
     expect(s.toggleArm(0)).toBe(true);

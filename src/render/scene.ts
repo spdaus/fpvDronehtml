@@ -184,15 +184,21 @@ function treeMeshes(trees: readonly Tree[]): THREE.InstancedMesh[] {
   return [trunks, cones];
 }
 
+/**
+ * Sky radius. Drawn first without depth writes, so its size is invisible, but it must sit well inside
+ * the far plane or its middle gets clipped and the pale background shows through.
+ */
+export const SKY_RADIUS = 200;
+
 function skyDome(): THREE.Mesh {
-  const g = new THREE.SphereGeometry(380, 24, 12);
+  const g = new THREE.SphereGeometry(SKY_RADIUS, 24, 12);
   const p = g.attributes.position;
   const col = new Float32Array(p.count * 3);
   const zen = new THREE.Color(SKY_ZENITH);
   const hor = new THREE.Color(SKY_HORIZON);
   const tmp = new THREE.Color();
   for (let i = 0; i < p.count; i++) {
-    const t = Math.max(0, p.getY(i) / 380);
+    const t = Math.max(0, p.getY(i) / SKY_RADIUS);
     tmp.copy(hor).lerp(zen, Math.pow(t, 0.6));
     col[i * 3] = tmp.r;
     col[i * 3 + 1] = tmp.g;

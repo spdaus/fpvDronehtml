@@ -32,6 +32,9 @@ self-levels.
 | **−** | Calibrate sticks (title screen, or from the pause menu) |
 | **X** | Performance / latency overlay |
 
+**Options** (title screen or pause menu): **Invert pitch** makes right stick up = nose up. It's off
+by default, which is the FPV standard: stick up = nose down.
+
 **Goal:** a pink target appears somewhere inside the bando. Fly into it to score, and the next one
 spawns elsewhere. Your last and best times are on the OSD, and a pink bracket or edge arrow points
 to the target. A hard hit (≥ 7 m/s into something) is a crash: press B to reset.

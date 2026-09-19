@@ -42,6 +42,8 @@ export class InputManager {
   /** Buttons held this frame, and those that went down this frame (unified mask + nav bits). */
   held = 0;
   pressed = 0;
+  /** Pilot option: right stick up = nose up. Applied after calibration, to every source. */
+  invertPitch = false;
   /** Latest raw axes of the active source (for the calibration screen). */
   readonly raw = new Float32Array(MAX_AXES);
   private readonly cals: Record<SourceKind, Calibration>;
@@ -95,7 +97,7 @@ export class InputManager {
     this.keyboard.poll(now);
     const prev = this.active;
     if (this.forced) this.active = this.forced;
-    else if (this.bridge.connected && this.bridge.alive(now)) this.active = 'bridge';
+    else if (this.bridge.connected && this.bridge.recent(now)) this.active = 'bridge';
     else if (this.gamepad.connected) this.active = 'gamepad';
     else this.active = 'keyboard';
     if (prev !== this.active) this.lastSlot = -2;
@@ -135,7 +137,8 @@ export class InputManager {
     }
     out.throttle = this.cached.throttle;
     out.yaw = this.cached.yaw;
-    out.pitch = this.cached.pitch;
+    const pitch = this.cached.pitch;
+    out.pitch = this.invertPitch && pitch !== 0 ? -pitch : pitch;
     out.roll = this.cached.roll;
     return true;
   }

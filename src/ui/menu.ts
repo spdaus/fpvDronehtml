@@ -1,5 +1,6 @@
 export interface MenuItem {
-  label: string;
+  /** Static text, or a function for items that show a value (e.g. a toggle). */
+  label: string | (() => string);
   action: () => void;
 }
 
@@ -26,7 +27,7 @@ export class Menu {
       b.type = 'button';
       b.className = 'menu-item';
       b.setAttribute('role', 'menuitem');
-      b.textContent = item.label;
+      b.textContent = labelOf(item);
       b.addEventListener('mouseenter', () => this.select(i));
       b.addEventListener('click', () => {
         this.select(i);
@@ -36,6 +37,11 @@ export class Menu {
       return b;
     });
     this.select(0);
+  }
+
+  /** Re-read computed labels (after a toggle changes). */
+  refresh(): void {
+    this.buttons.forEach((b, i) => (b.textContent = labelOf(this.items[i])));
   }
 
   select(i: number): void {
@@ -50,4 +56,8 @@ export class Menu {
   activate(): void {
     this.items[this.index]?.action();
   }
+}
+
+function labelOf(item: MenuItem): string {
+  return typeof item.label === 'function' ? item.label() : item.label;
 }

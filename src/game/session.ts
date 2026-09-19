@@ -7,8 +7,12 @@ import { TargetGame } from './targets';
 
 export type FlightState = 'disarmed' | 'armed' | 'crashed';
 
-/** Throttle stick must be below this (0..1) to arm, like a real flight controller. */
-export const ARM_THROTTLE_MAX = 0.05;
+/**
+ * Throttle stick (0..1) must be below this to arm, like a real flight controller. Generous because
+ * a self-centring Pro Controller stick rarely reaches full travel; the curve output here is still
+ * well under hover, so arming never lifts off.
+ */
+export const ARM_THROTTLE_MAX = 0.2;
 /** Failsafe (R1.9): hold sticks centred this long after losing the link, then disarm. */
 export const FAILSAFE_HOLD_S = 0.5;
 
@@ -32,6 +36,8 @@ export class GameSession {
   armWarnUntil = -1;
   /** True while the input link is lost (OSD shows FAILSAFE). */
   failsafe = false;
+  /** Throttle stick (0..1) of the last step, for the OSD arming hint. */
+  throttleStick = 0.5;
   private failsafeTime = 0;
   private readonly report: ContactReport = { contacts: 0, maxImpact: 0 };
 
@@ -93,6 +99,7 @@ export class GameSession {
       this.failsafeTime = 0;
     }
 
+    this.throttleStick = input.throttle;
     d.step(cmd);
     this.world.collision.resolve(d, this.report);
     if (this.state === 'armed' && this.report.maxImpact >= d.params.crashSpeed) {

@@ -132,6 +132,9 @@ n = clamp(n, −1, 1)
 out = |n| < dz ? 0 : sign(n)·(|n| − dz)/(1 − dz)          // continuous deadzone, R1.5
 ```
 
+**Invert pitch (R1.10).** `InputManager.invertPitch` negates pitch after calibration mapping, so it
+applies to every source and never touches the saved calibration. It is persisted in the settings.
+
 **Channel assignment.** Each of `throttle`, `yaw`, `pitch` and `roll` has `{axis, invert}`. The throttle
 stick value `s = (out+1)/2 ∈ [0,1]` goes into the throttle curve (§4.2).
 
@@ -393,7 +396,9 @@ There is no interpolation between physics states: at 1 kHz the rendered state is
 ## 9. Rendering (R8, R9, R10.4)
 
 - **Context.** Created manually with `canvas.getContext('webgl2', {antialias:false, alpha:false, depth:true,
-  stencil:false, desynchronized:true, powerPreference:'high-performance', preserveDrawingBuffer:false})`
+  stencil:false, powerPreference:'high-performance', preserveDrawingBuffer:false})`. *Δ `desynchronized`
+  was dropped after the playtest: that canvas could present half-drawn frames, which showed as white
+  flashes.*
   and passed to `new WebGLRenderer({canvas, context})`.
 - **Resolution.** The canvas is sized in CSS to fill the window. The drawing buffer is set explicitly to the
   internal resolution: 1280×720 at `scale = 1`, fitted to the window's aspect, with `pixelRatio` 1.
@@ -417,9 +422,11 @@ There is no interpolation between physics states: at 1 kHz the rendered state is
     than 1.0.
   - After any change there is a hysteresis cool-down of 2 s.
 - **FPV camera (R8.1–R8.2).**
-  - The camera is a child transform of the drone at body offset `(0, 0.02, −0.06)`, rotated about body X
+  - The camera is a child transform of the drone at body offset `(0, 0.02, −0.03)`, rotated about body X
     by +uptilt.
-  - `PerspectiveCamera.fov` (vertical) is `2·atan(tan(hfov/2)/aspect)`, with near 0.05 and far 300.
+  - `PerspectiveCamera.fov` (vertical) is `2·atan(tan(hfov/2)/aspect)`, with near 0.02 and far 350. *Δ The mount moved in from −0.06 and near from 0.05 after the playtest: the old
+    near plane reached past the collision sphere, so touching a wall showed the sky through it (white flashes).
+    `tests/camera.test.ts` guards this.*
 - **OSD (R8.3–R8.4).** An absolutely positioned DOM layer uses monospace text in a Betaflight-like layout.
   - Text is written through cached `textContent` nodes, and only when the value changes, at up to 20 Hz.
   - The chevron and bracket move by `transform` only, every frame, with no layout reads.
@@ -433,7 +440,7 @@ There is no interpolation between physics states: at 1 kHz the rendered state is
 **States.**
 
 ```
-DISARMED ──arm (throttle s < 0.05)──► ARMED ──disarm──► DISARMED
+DISARMED ──arm (throttle s < 0.2)──► ARMED ──disarm──► DISARMED
     ▲                                    │
     └────────── reset ◄── CRASHED ◄──impact ≥ v_crash
 ```
@@ -469,7 +476,7 @@ DISARMED ──arm (throttle s < 0.05)──► ARMED ──disarm──► DISA
 | SSE over loopback, `TCP_NODELAY` | < 1 ms |
 | Wait for next frame | 0–16.7 ms (avg 8.3) |
 | Physics + render submit | ~4 ms |
-| Compositor + scan-out (vsync) | 16–33 ms; lower with `desynchronized` and the low-latency profile |
+| Compositor + scan-out (vsync) | 16–33 ms; lower with the low-latency (vsync off) profile |
 
 `play.bat` runs `python bridge/bridge.py --launch`. The bridge starts listening first, then opens
 Chrome (or Edge) with:

@@ -2,8 +2,11 @@ import * as THREE from 'three';
 import type { Drone } from '../sim/drone';
 import { DEG2RAD } from '../sim/math';
 
-/** Camera mount in the body frame: slightly up and ahead of centre (design.md §9, R8.1). */
-const MOUNT = new THREE.Vector3(0, 0.02, -0.06);
+/**
+ * Camera mount in the body frame: slightly up and ahead of centre (design.md §9, R8.1). Kept close to
+ * the centre so the near plane never reaches a surface the collision sphere is touching.
+ */
+export const MOUNT = new THREE.Vector3(0, 0.02, -0.03);
 
 const qDrone = new THREE.Quaternion();
 const qTilt = new THREE.Quaternion();

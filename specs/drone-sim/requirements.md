@@ -67,6 +67,10 @@ muscle memory matches a real radio.
 - **R1.9** If the controller disconnects in flight, then the system shall treat sticks as centered and
   throttle as hover-neutral for 0.5 s, and then disarm (failsafe). **[T]**
 
+- **R1.10** The system shall provide an Options screen, reachable from the title and pause menus, with an
+  **Invert pitch** toggle (right stick up = nose up). The choice shall persist between sessions and apply
+  to every input source. **[T]** (mapping) **[M]** (menu) — *added after the first playtest.*
+
 ## R2 — Throttle ("center = hover")
 
 **User story:** As a pilot using a self-centering stick, I want stick center to hold roughly level
@@ -213,7 +217,7 @@ somewhere inside.
   immediately after. No stage shall add a frame of buffering. **[M]**
 - **R10.3** Input samples received during a frame shall be applied to the physics substeps matching their
   arrival times, rather than all at once at the frame boundary. **[T]**
-- **R10.4** The WebGL context shall be created with low-latency hints (`desynchronized`, no MSAA,
+- **R10.4** The WebGL context shall be created with low-latency hints (no MSAA,
   high-performance GPU preference). **[M]**
 - **R10.5** The debug overlay shall show fps, average and p99 frame time, physics ms per frame, input source,
   input sample rate, input age (ms since the newest sample arrived), render resolution and draw calls. **[M]**

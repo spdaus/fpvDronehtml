@@ -104,5 +104,10 @@ Current state:
     - [ ] Targets appear inside the bando and score when hit.
     - [ ] The overlay shows 59–60 fps with p99 ≤ 17.5 ms in Chrome via `play.bat` (R9.1).
 
+- [x] **12a. Options screen** (R1.10, playtest feedback)
+  - Options is reachable from the title and pause menus, with an Invert pitch toggle persisted in the
+    settings.
+  - Test: `input.test.ts` (invert pitch option).
+
 - [ ] **12. Feel pass** (all of R4)
   - Adjust `src/sim/params.ts` from your fly-test feedback, keeping every test green.

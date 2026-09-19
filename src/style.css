@@ -195,6 +195,7 @@ body {
 /* ---------- panels (pause, calibration, bye) ---------- */
 
 #pause,
+#options,
 #calibration,
 #bye,
 #fatal {

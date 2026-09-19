@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import { DEG2RAD } from '../sim/math';
 
+/**
+ * Clip planes. The near plane must stay inside the quad's collision sphere together with the camera
+ * mount (see fpvCamera.ts), or brushing a wall lets the view cut through it and flash the sky behind.
+ */
+export const NEAR = 0.02;
+export const FAR = 350;
+
 /** Base internal resolution height at scale 1 (FPV goggle-like 720p). */
 export const BASE_HEIGHT = 720;
 
@@ -24,14 +31,15 @@ export class Renderer {
       alpha: false,
       depth: true,
       stencil: false,
-      desynchronized: true,
       powerPreference: 'high-performance',
       preserveDrawingBuffer: false,
     });
+    // No `desynchronized`: that low-latency canvas can present a frame while it is still being
+    // drawn, which shows up as flashes of the (pale sky) clear colour.
     if (!context) throw new Error('WebGL2 is not available');
     this.three = new THREE.WebGLRenderer({ canvas, context, antialias: false });
     this.three.setPixelRatio(1);
-    this.camera = new THREE.PerspectiveCamera(75, 16 / 9, 0.05, 400);
+    this.camera = new THREE.PerspectiveCamera(75, 16 / 9, NEAR, FAR);
     this.camera.rotation.order = 'YXZ';
     this.resize();
   }

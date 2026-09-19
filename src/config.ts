@@ -8,6 +8,8 @@ export interface Settings {
   fovH: number;
   /** Upper bound for the dynamic render scale (1 = 1280×720). */
   maxRenderScale: number;
+  /** Right stick up = nose up (flight-sim style) instead of the FPV-standard nose down. */
+  invertPitch: boolean;
   flight: FlightSettings;
 }
 
@@ -15,6 +17,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cameraTilt: 30,
   fovH: 110,
   maxRenderScale: 1,
+  invertPitch: false,
   flight: DEFAULT_FLIGHT,
 };
 

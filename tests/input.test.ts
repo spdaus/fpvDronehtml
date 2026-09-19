@@ -9,6 +9,7 @@ import {
   saveCalibration,
   type StorageLike,
 } from '../src/input/calibration';
+import { InputManager } from '../src/input/inputManager';
 import { SampleBuffer } from '../src/input/sampleBuffer';
 import type { StickInput } from '../src/sim/drone';
 
@@ -55,6 +56,22 @@ describe('Mode 2 mapping', () => {
     buf.push(1, [0, 0, 0, 0, 0, 0], 0);
     mapSticks(buf, buf.latest(), cal, out);
     expect(out).toEqual({ throttle: 0.5, yaw: 0, pitch: 0, roll: 0 });
+  });
+});
+
+describe('invert pitch option', () => {
+  it('R1.10 flips only pitch, after calibration mapping', () => {
+    const input = new InputManager(undefined, 'keyboard');
+    // keyboard axes: throttle, yaw, pitch, roll
+    input.keyboard.buffer.push(0, [0.4, 0.3, 0.5, 0.2], 0);
+    const out: StickInput = { throttle: 0, yaw: 0, pitch: 0, roll: 0 };
+    const expectSticks = (want: StickInput) => {
+      input.sticksAt(1, out);
+      for (const k of ['throttle', 'yaw', 'pitch', 'roll'] as const) expect(out[k]).toBeCloseTo(want[k], 6);
+    };
+    expectSticks({ throttle: 0.7, yaw: 0.3, pitch: 0.5, roll: 0.2 });
+    input.invertPitch = true;
+    expectSticks({ throttle: 0.7, yaw: 0.3, pitch: -0.5, roll: 0.2 });
   });
 });
 

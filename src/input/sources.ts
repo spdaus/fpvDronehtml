@@ -36,8 +36,14 @@ export class BridgeSource {
     this.es?.addEventListener('error', () => { this.connected = false; });
   }
 
+  /** Link is healthy (heartbeats every 250 ms): used by the failsafe. */
   alive(now: number): boolean {
     return now - this.lastMessageAt < 600;
+  }
+
+  /** Recently heard from: used to pick the source, so a brief gap doesn't flip to the gamepad. */
+  recent(now: number): boolean {
+    return now - this.lastMessageAt < 2000;
   }
 
   private onPacket(data: string): void {

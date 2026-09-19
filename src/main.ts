@@ -17,7 +17,7 @@ import { Menu } from './ui/menu';
 import { BANDO } from './world/bando';
 import { buildWorld } from './world/world';
 
-type Mode = 'title' | 'playing' | 'paused' | 'calibrating' | 'exited';
+type Mode = 'title' | 'playing' | 'paused' | 'options' | 'calibrating' | 'exited';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const app = $('app');
@@ -57,6 +57,7 @@ const input = new InputManager(
   storage(),
   forcedSource === 'bridge' || forcedSource === 'gamepad' || forcedSource === 'keyboard' ? forcedSource : undefined,
 );
+input.invertPitch = settings.invertPitch;
 const osd = new Osd(app);
 osd.visible = false;
 const debug = new DebugOverlay(app);
@@ -74,25 +75,35 @@ const sticks: StickInput = { throttle: 0.5, yaw: 0, pitch: 0, roll: 0 };
 
 const titleEl = $('title');
 const pauseEl = $('pause');
+const optionsEl = $('options');
 const titleMenu = new Menu(titleEl.querySelector<HTMLElement>('.title-menu-slot')!, [
   { label: 'New Game', action: newGame },
+  { label: 'Options', action: openOptions },
   { label: 'Exit', action: exitGame },
 ]);
 const pauseMenu = new Menu(pauseEl.querySelector<HTMLElement>('.menu-slot')!, [
   { label: 'Resume', action: resume },
   { label: 'Restart', action: restart },
+  { label: 'Options', action: openOptions },
   { label: 'Calibrate sticks', action: () => openCalibration(() => setMode('paused')) },
   { label: 'Quit to title', action: quitToTitle },
 ]);
+const optionsMenu = new Menu(optionsEl.querySelector<HTMLElement>('.menu-slot')!, [
+  { label: () => `Invert pitch: ${settings.invertPitch ? 'On' : 'Off'}`, action: toggleInvertPitch },
+  { label: 'Back', action: closeOptions },
+]);
+let optionsReturn: Mode = 'title';
 
 function setMode(m: Mode): void {
   mode = m;
   titleEl.classList.toggle('hidden', m !== 'title');
   pauseEl.classList.toggle('hidden', m !== 'paused');
+  optionsEl.classList.toggle('hidden', m !== 'options');
   $('bye').classList.toggle('hidden', m !== 'exited');
-  osd.visible = session !== null && (m === 'playing' || m === 'paused');
+  osd.visible = session !== null && (m === 'playing' || m === 'paused' || m === 'options');
   if (m === 'title') titleMenu.select(0);
   if (m === 'paused') pauseMenu.select(0);
+  if (m === 'options') optionsMenu.select(0);
 }
 
 function newGame(): void {
@@ -124,6 +135,22 @@ function quitToTitle(): void {
   setMode('title');
 }
 
+function openOptions(): void {
+  optionsReturn = mode;
+  setMode('options');
+}
+
+function closeOptions(): void {
+  setMode(optionsReturn);
+}
+
+function toggleInvertPitch(): void {
+  settings.invertPitch = !settings.invertPitch;
+  input.invertPitch = settings.invertPitch;
+  saveSettings(settings);
+  optionsMenu.refresh();
+}
+
 function openCalibration(done: (saved: boolean) => void): void {
   setMode('calibrating');
   calibration.start(done);
@@ -147,7 +174,7 @@ async function exitGame(): Promise<void> {
 let keyPresses = 0;
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
-  const inMenu = mode === 'title' || mode === 'paused' || mode === 'calibrating';
+  const inMenu = mode === 'title' || mode === 'paused' || mode === 'options' || mode === 'calibrating';
   let b = 0;
   switch (e.code) {
     case 'ArrowUp':
@@ -225,6 +252,11 @@ function tilt(delta: number): void {
 
 function playFrame(now: number, pressed: number): number {
   const s = session!;
+  if (input.hasController && !input.calibrated) {
+    // Uncalibrated sticks are off-centre and short of full travel: calibrate before flying.
+    openCalibration((saved) => (saved ? resume() : setMode('paused')));
+    return 0;
+  }
   if (pressed & BIND.pause) {
     setMode('paused');
     return 0;
@@ -317,6 +349,11 @@ function frame(): void {
       if (pressed & (BIND.back | BIND.pause)) resume();
       else menuNav(pauseMenu, pressed);
       break;
+    case 'options':
+      if (pressed & BIND.back) closeOptions();
+      else menuNav(optionsMenu, pressed);
+      if (!session) orbitCamera(renderer.camera, now / 1000, 0, 5, (BANDO.z0 + BANDO.z1) / 2);
+      break;
     case 'calibrating':
       calibration.update(now);
       if (!session) orbitCamera(renderer.camera, now / 1000, 0, 5, (BANDO.z0 + BANDO.z1) / 2);
@@ -339,7 +376,7 @@ function frame(): void {
   }
   view.sky.position.copy(renderer.camera.position);
 
-  if (session && (mode === 'playing' || mode === 'paused')) {
+  if (session && (mode === 'playing' || mode === 'paused' || mode === 'options')) {
     osd.update(now, session, renderer.camera, settings.cameraTilt, input.hasController);
   }
 
