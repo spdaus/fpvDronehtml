@@ -1,6 +1,6 @@
 # Design — FPV Drone Simulator (MVP)
 
-Status: **DRAFT — awaiting review**
+Status: **APPROVED — MVP implemented** (implementation deviations are marked *Δ*)
 Implements: [requirements.md](requirements.md) · Work breakdown: [tasks.md](tasks.md)
 
 ## 1. Architecture
@@ -39,7 +39,7 @@ src/game/{state,targetGame}.ts
 src/render/{renderer,scene,materials,fpvCamera,osd,debugOverlay,dynamicResolution}.ts
 src/ui/calibrationScreen.ts
 tests/*.test.ts             Vitest (one file per module; test names carry R-ids)
-bench/sim.bench.ts          physics throughput benchmark
+tests/perf.test.ts          physics throughput gate (`npm run bench`) — *Δ Vitest 5 dropped `bench()`*
 play.bat                    launcher
 ```
 
@@ -85,14 +85,23 @@ A motor at `(x, 0, z)` producing thrust `T` along body +Y creates torque `(−zT
     `threading.Condition.notify_all()`.
 - **`GET /stream`** is Server-Sent Events: `Content-Type: text/event-stream` with `TCP_NODELAY` set on the
   socket.
-  - Each change is sent as `data:{"s":seq,"t":bridge_ms,"a":[x,y,r,u],"b":buttons_bitmask,"p":pov_or_-1}\n\n`,
-    followed by an immediate flush.
-  - A heartbeat comment (`:hb`) goes out every 250 ms. When the controller is absent it sends
-    `data:{"s":seq,"c":0}`.
+  - Each change is sent as `data:{"s":seq,"t":bridge_ms,"c":1,"a":[X,Y,Z,R,U,V],"b":buttons_bitmask,"p":pov_or_-1}\n\n`,
+    followed by an immediate flush. *Δ All six winmm axes are sent; Z and V are unused on this
+    controller and rest at −1.*
+  - A heartbeat goes out every 250 ms as a named event (`event:hb`). *Δ Not an SSE comment:
+    `EventSource` never surfaces comments, so the page couldn't use them for link health.* When the
+    controller is absent it sends `data:{"s":seq,"c":0}`.
+  - *Δ The bridge listens on **port 8777**, bound with `SO_EXCLUSIVEADDRUSE`. The prototype bridge
+    uses 8765, and Windows' `SO_REUSEADDR` let two servers silently share that port.*
+  - `POST /quit` (header `X-FPV: quit`) stops the bridge. The title screen's Exit uses it.
+  - `--launch [--low-latency] [--windowed]` opens the game in Chrome/Edge (see §12).
 - **`GET /state`** returns the same JSON once. It is kept for tools and debugging.
 - **`GET /*`** serves `dist/`, with `index.html` as the fallback. Everything is sent with `Cache-Control: no-store`.
-- Axis normalisation is `(v − 32767.5) / 32767.5`, rounded to 4 decimal places. Axis order is `[X, Y, R, U]`;
-  on this controller the right stick reports X on U and Y on R, and the calibration step learns that anyway.
+- Axis normalisation is `(v − 32767.5) / 32767.5`, rounded to 4 decimal places. Axis order is
+  `[X, Y, Z, R, U, V]`; on this controller the right stick reports X on U (4) and Y on R (3), and the
+  calibration step learns that anyway. Measured over Bluetooth, the controller reports about every
+  15 ms (≈66 Hz), and the right stick rests at about −0.13 on R, which is why centre calibration is
+  mandatory.
 
 ### 3.2 Browser sources
 
@@ -136,7 +145,7 @@ stick value `s = (out+1)/2 ∈ [0,1]` goes into the throttle curve (§4.2).
 Everything is saved to `localStorage["fpvsim.calib.<source>"]`.
 
 **Defaults** (no saved calibration):
-- Bridge: throttle = axis 1 inverted, yaw = 0, pitch = 2 inverted, roll = 3.
+- Bridge: throttle = axis 1 inverted, yaw = 0, pitch = 3 inverted, roll = 4.
 - Standard gamepad: 1 inverted, 0, 3 inverted, 2.
 - Center 0, range ±1 on every axis.
 
@@ -462,12 +471,21 @@ DISARMED ──arm (throttle s < 0.05)──► ARMED ──disarm──► DISA
 | Physics + render submit | ~4 ms |
 | Compositor + scan-out (vsync) | 16–33 ms; lower with `desynchronized` and the low-latency profile |
 
-`play.bat` offers two profiles:
-- **Normal:** `chrome --app=http://localhost:8765 --force-device-scale-factor=1`
-- **Low latency:** adds `--disable-gpu-vsync --disable-frame-rate-limit`, which may tear.
+`play.bat` runs `python bridge/bridge.py --launch`. The bridge starts listening first, then opens
+Chrome (or Edge) with:
+- `--app=http://localhost:8777/`
+- `--user-data-dir=.chrome-profile`: a separate process, so the flags apply even with Chrome already
+  open, and a one-entry history so `window.close()` works for Exit.
+- `--force_high_performance_gpu` and `--start-fullscreen`.
 
-The README also tells the user to set Chrome to "High performance" in Windows Graphics settings, so it
-renders on the GT 750M rather than the HD 4600.
+`play.bat lowlatency` adds `--disable-gpu-vsync --disable-frame-rate-limit`, which may tear. *Δ The
+bridge launches the browser instead of the batch file doing it, so the page never loads before the
+server is up.*
+
+**Measured on the target laptop** (in-app browser, ANGLE D3D11 on the GT 750M):
+- Render plus a forced GPU finish at 1280×720: p50 1.3–4.8 ms, p95 ≤ 7.5 ms.
+- 7 draw calls, 22 k triangles.
+- Physics: 0.04 ms per frame (Node), 0.11 ms in the browser.
 
 ## 13. Traceability: requirement → verification
 
@@ -491,7 +509,7 @@ renders on the GT 750M rather than the HD 4600.
 | R6.3, R6.5 | `tests/world.test.ts` |
 | R7.1–R7.3, R7.6 | `tests/targets.test.ts` (1000 seeded spawns) |
 | R9.2 | `tests/dynamicResolution.test.ts` |
-| R9.4 | `bench/sim.bench.ts` + `tests/perf.test.ts` (60 s sim < 3 s) |
+| R9.4 | `tests/perf.test.ts` (60 s sim < 3 s; `npm run bench` prints ms/frame) |
 | R10.1 | `bridge/test_bridge.py` |
 | R10.3 | `tests/sampleBuffer.test.ts` |
 | R1.1, R1.7, R1.8, R6.1–R6.4, R7.4–R7.5, R8, R9.1, R9.3, R9.5, R10.2, R10.4–R10.6 | browser check + manual flight checklist (tasks.md, Task 11) |

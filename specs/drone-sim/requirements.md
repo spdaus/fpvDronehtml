@@ -1,6 +1,6 @@
 # Requirements — FPV Drone Simulator (MVP)
 
-Status: **DRAFT — awaiting review**
+Status: **APPROVED — MVP implemented.** Open items: R1.7 in-game button rebinding (defaults only); R9.1 and R9.5 still need confirming on the target laptop in Chrome.
 Companion docs: [design.md](design.md) · [tasks.md](tasks.md)
 
 ## Purpose

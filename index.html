@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FPV Sim</title>
+    <meta name="description" content="Realistic FPV acro drone simulator for the Switch Pro Controller." />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="view"></canvas>
+
+      <section id="title" class="screen">
+        <div class="title-shade"></div>
+        <div class="title-card">
+          <div class="kicker">ACRO · 1 KHZ PHYSICS · SWITCH PRO</div>
+          <h1 class="brand"><span>FPV</span><em>SIM</em></h1>
+          <div class="subtitle">BANDO FREESTYLE</div>
+          <div class="title-menu-slot"></div>
+          <div class="title-status" id="title-status"></div>
+        </div>
+        <dl class="legend">
+          <div><dt>ZR</dt><dd>Arm / disarm</dd></div>
+          <div><dt>ZL · B</dt><dd>Reset</dd></div>
+          <div><dt>+</dt><dd>Pause</dd></div>
+          <div><dt>−</dt><dd>Calibrate sticks</dd></div>
+          <div><dt>D-pad ↕</dt><dd>Camera tilt</dd></div>
+          <div><dt>X</dt><dd>Perf stats</dd></div>
+        </dl>
+      </section>
+
+      <section id="pause" class="screen hidden">
+        <div class="panel">
+          <div class="panel-kicker">PAUSED</div>
+          <div class="menu-slot"></div>
+        </div>
+      </section>
+
+      <section id="bye" class="screen hidden">
+        <div class="panel">
+          <div class="panel-kicker">FPV SIM</div>
+          <h2 id="bye-text">Shutting down…</h2>
+        </div>
+      </section>
+
+      <section id="fatal" class="screen hidden">
+        <div class="panel">
+          <div class="panel-kicker">CAN'T START</div>
+          <h2 id="fatal-text"></h2>
+        </div>
+      </section>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
